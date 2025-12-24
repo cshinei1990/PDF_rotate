@@ -193,10 +193,17 @@ def process_file(inp: Path) -> None:
 
         if conf < CONF_THRESHOLD:
             # OSDの信頼度が低い場合（またはテキストがない場合）、姿勢推定を試す
-            p_rot, p_conf = detect_pose_up_down(portrait_img)
-            if p_conf > conf:
-                rot = p_rot
-                conf = p_conf
+            # ただし、テキストが検出されている場合は OSD を優先したいので、
+            # OSD の信頼度が極端に低い (例: < 0.5) 場合のみ姿勢判定を採用する
+            run_pose = True
+            if has_text_content(portrait_img) and conf >= 0.5:
+                run_pose = False
+
+            if run_pose:
+                p_rot, p_conf = detect_pose_up_down(portrait_img)
+                if p_conf > conf:
+                    rot = p_rot
+                    conf = p_conf
 
         allowed_updown = [0, 180]
         if conf < CONF_THRESHOLD and high_conf_updown_rots:
