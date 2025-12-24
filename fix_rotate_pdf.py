@@ -186,10 +186,17 @@ def process_file(inp: Path) -> None:
 
         # --- Step 2: decide upright vs upside-down (0 or 180) ---
         used_fallback = False
+        rot, conf = 0, 0.0
+
         if has_text_content(portrait_img):
             rot, conf = detect_rotation_osd(portrait_img)
-        else:
-            rot, conf = detect_pose_up_down(portrait_img)
+
+        if conf < CONF_THRESHOLD:
+            # OSDの信頼度が低い場合（またはテキストがない場合）、姿勢推定を試す
+            p_rot, p_conf = detect_pose_up_down(portrait_img)
+            if p_conf > conf:
+                rot = p_rot
+                conf = p_conf
 
         allowed_updown = [0, 180]
         if conf < CONF_THRESHOLD and high_conf_updown_rots:
