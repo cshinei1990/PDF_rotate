@@ -9,8 +9,12 @@ import pytesseract
 import tkinter as tk
 from tkinter import filedialog
 
-CONF_THRESHOLD = 5.0   # 漫画向けに低め。まずはこのくらいから
-DPI = 200              # 低すぎるとOSD精度が落ちやすい
+DEFAULT_CONF_THRESHOLD = 5.0   # 漫画向けに低め。まずはこのくらいから
+DEFAULT_DPI = 200              # 低すぎるとOSD精度が落ちやすい
+
+# 実行時に入力で上書きされる値
+CONF_THRESHOLD = DEFAULT_CONF_THRESHOLD
+DPI = DEFAULT_DPI
 
 
 def detect_rotation_osd(pil_img):
@@ -140,6 +144,21 @@ def save_pdf(pdf: pikepdf.Pdf, out: Path) -> Path:
     return out
 
 
+def prompt_numeric_value(name: str, default, caster):
+    message = (
+        f"{name} を入力してください（参考値: {default}）。未入力の場合は {default} を使用します: "
+    )
+    raw = input(message).strip()
+    if not raw:
+        return default
+
+    try:
+        return caster(raw)
+    except (TypeError, ValueError):
+        print(f"{name} の入力を解釈できませんでした。参考値 {default} を使用します。")
+        return default
+
+
 def process_file(inp: Path) -> None:
     out = determine_output_path(inp)
 
@@ -204,6 +223,9 @@ def process_file(inp: Path) -> None:
 
 if __name__ == "__main__":
     import sys
+
+    CONF_THRESHOLD = prompt_numeric_value("CONF_THRESHOLD", DEFAULT_CONF_THRESHOLD, float)
+    DPI = prompt_numeric_value("DPI", DEFAULT_DPI, int)
 
     # コマンドライン引数があれば従来通り使う。なければファイルダイアログで選択。
     if len(sys.argv) >= 2:
