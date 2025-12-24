@@ -1,7 +1,6 @@
 from pathlib import Path
 from collections import Counter
 
-import numpy as np
 import pikepdf
 from pdf2image import convert_from_path
 import pytesseract
@@ -38,52 +37,6 @@ def snap_rotation_to_allowed(rotation: int, allowed_rotations: list[int]) -> int
         return min((a - b) % 360, (b - a) % 360)
 
     return min(allowed_rotations, key=lambda allowed: _distance(rotation % 360, allowed % 360))
-
-
-def page_contains_text(pil_img) -> bool:
-    try:
-        data = pytesseract.image_to_data(pil_img.convert("RGB"), output_type=pytesseract.Output.DICT)
-    except pytesseract.TesseractError:
-        return False
-
-    text_entries = data.get("text", [])
-    return any(entry.strip() for entry in text_entries)
-
-
-def estimate_updown_with_pose(pil_img):
-    """Estimate upright orientation (0 or 180) using a pose estimation model.
-
-    Returns (rotation, confidence). If no pose can be detected or mediapipe is not
-    installed, returns (None, 0.0).
-    """
-
-    try:
-        import mediapipe as mp
-    except ImportError:
-        print("mediapipe が見つからないためポーズ推定をスキップします。pip install mediapipe で追加できます。")
-        return None, 0.0
-
-    mp_pose = mp.solutions.pose
-    img_rgb = np.array(pil_img.convert("RGB"))
-
-    with mp_pose.Pose(static_image_mode=True) as pose:
-        results = pose.process(img_rgb)
-
-    if not results.pose_landmarks:
-        return None, 0.0
-
-    nose_y = results.pose_landmarks.landmark[mp_pose.PoseLandmark.NOSE].y
-    ankles = [
-        results.pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_ANKLE].y,
-        results.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_ANKLE].y,
-    ]
-    lowest_ankle_y = max(ankles)
-
-    # y 座標は画像高さで正規化されており、下に行くほど値が大きい。
-    is_upright = nose_y < lowest_ankle_y
-    confidence = float(abs(lowest_ankle_y - nose_y))
-
-    return (0 if is_upright else 180), confidence
 
 
 def determine_output_path(inp: Path) -> Path:
@@ -134,64 +87,41 @@ def main(inp):
     high_conf_rots = []
 
     for i, (img, page) in enumerate(zip(images, pdf.pages), start=1):
-        # Step1: 横長ページは先に90/270に丸めて縦向きにする
-        initial_rot, initial_conf = detect_rotation_osd(img)
-        is_landscape = img.width > img.height
-        first_allowed = [90, 270] if is_landscape else [0, 180]
-        snapped_first = snap_rotation_to_allowed(initial_rot, first_allowed)
+        rot, conf = detect_rotation_osd(img)
 
-        portrait_img = img.rotate(-snapped_first, expand=True) if is_landscape else img
-
-        # Step2: 縦向き前提で上下(0/180)を推定する
-        upright_rot, upright_conf = detect_rotation_osd(portrait_img)
-        upright_snap = snap_rotation_to_allowed(upright_rot, [0, 180])
-
-        used_pose = False
-        if upright_conf < CONF_THRESHOLD and not page_contains_text(portrait_img):
-            pose_rot, pose_conf = estimate_updown_with_pose(portrait_img)
-            if pose_rot is not None and pose_conf >= upright_conf:
-                upright_snap = pose_rot
-                upright_conf = max(pose_conf, CONF_THRESHOLD)
-                used_pose = True
-
-        total_rotation = (snapped_first + upright_snap) % 360 if is_landscape else upright_snap
+        # まず縦横比を確認し、縦長なら0/180、横長なら90/270の範囲に絞る
+        is_portrait = img.height >= img.width
+        allowed_rotations = [0, 180] if is_portrait else [90, 270]
 
         # 信頼度が低いページは、これまでの高信頼ページの多数決で補完する
         used_fallback = False
-        if upright_conf < CONF_THRESHOLD and high_conf_rots:
-            total_rotation = Counter(high_conf_rots).most_common(1)[0][0]
+        if conf < CONF_THRESHOLD and high_conf_rots:
+            applied_rot = Counter(high_conf_rots).most_common(1)[0][0]
             used_fallback = True
         else:
-            if upright_conf >= CONF_THRESHOLD:
-                high_conf_rots.append(total_rotation)
+            applied_rot = rot % 360
 
-        if total_rotation % 360 != 0:
-            page.Rotate = total_rotation
+        snapped_rot = snap_rotation_to_allowed(applied_rot, allowed_rotations)
+        if conf >= CONF_THRESHOLD:
+            high_conf_rots.append(snapped_rot)
+
+        # rot(0/90/180/270)を、そのページの回転として設定
+        # もし向きが逆に出る場合は、(360-rot)%360 に変えてください
+        if snapped_rot % 360 != 0:
+            page.Rotate = snapped_rot
             changed += 1
 
-        if upright_conf < CONF_THRESHOLD:
-            low.append(
-                (
-                    i,
-                    total_rotation,
-                    upright_conf,
-                    used_fallback,
-                    snapped_first,
-                    used_pose,
-                )
-            )
+        if conf < CONF_THRESHOLD:
+            low.append((i, rot, conf, used_fallback, snapped_rot))
 
     out = save_pdf(pdf, out)
 
     print(f"Saved: {out}  changed_pages={changed}")
     if low:
         print("Low-confidence pages (please verify):")
-        for p, r, c, used_fallback, snapped_first, used_pose in low:
+        for p, r, c, used_fallback, applied in low:
             suffix = " (fallback used)" if used_fallback else ""
-            pose_suffix = " (pose used)" if used_pose else ""
-            print(
-                f"  page {p}: rot={r}, conf={c}{suffix}{pose_suffix}, initial_landscape_rot={snapped_first}"
-            )
+            print(f"  page {p}: rot={applied}, conf={c}{suffix}")
 
 
 if __name__ == "__main__":
