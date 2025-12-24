@@ -9,9 +9,18 @@ CONF_THRESHOLD = 5.0   # 漫画向けに低め。まずはこのくらいから
 DPI = 200              # 低すぎるとOSD精度が落ちやすい
 
 def detect_rotation_osd(pil_img):
-    osd = pytesseract.image_to_osd(pil_img)
-    rot = int(re.search(r"Rotate:\s+(\d+)", osd).group(1))
-    conf = float(re.search(r"Orientation confidence:\s+([\d.]+)", osd).group(1))
+    try:
+        # Use dict output to avoid regex parsing and convert to RGB to ensure DPI metadata
+        osd = pytesseract.image_to_osd(
+            pil_img.convert("RGB"), output_type=pytesseract.Output.DICT
+        )
+        rot = int(osd.get("rotate", 0))
+        conf = float(osd.get("orientation_confidence", 0.0))
+    except pytesseract.TesseractError as exc:
+        # When Tesseract fails due to few characters or missing resolution, treat as unknown
+        print(f"Tesseract OSD failed ({exc}); using default rotation=0, conf=0")
+        rot, conf = 0, 0.0
+
     return rot, conf
 
 def main(inp, out):
