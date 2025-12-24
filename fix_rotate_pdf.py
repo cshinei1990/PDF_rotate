@@ -265,6 +265,19 @@ def process_file(inp: Path) -> None:
             r_rot, r_conf = detect_rotation_osd(rotated_img)
             score_rotated = r_conf if r_rot == 0 else 0.0
 
+            # 文字情報による判定が不可能な場合（両方の信頼度が低い場合）、画像情報（姿勢推定）で再判定
+            # 例: 両方とも信頼度が 1.0 未満など、明確な判断ができていない場合
+            OSD_CHECK_THRESHOLD = 1.0
+            if score_original < OSD_CHECK_THRESHOLD and score_rotated < OSD_CHECK_THRESHOLD:
+                # 姿勢判定を実施
+                p_rot, p_conf = detect_pose_up_down(portrait_img)
+                # 姿勢推定で「0度（正立）」と出た場合、originalスコアを上書き
+                if p_rot == 0:
+                    score_original = p_conf
+                # 「180度（倒立）」と出た場合、rotatedスコア（＝回転させた状態が正立）を上書き
+                elif p_rot == 180:
+                    score_rotated = p_conf
+
             # 元の方が「正立している」信頼度が高いなら、回転を取り消す
             if score_original > score_rotated:
                 print(f"  [DoubleCheck] page {i}: Reverting 180 rotation. Score Orig({score_original}) > Rot({score_rotated})")
