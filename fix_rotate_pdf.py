@@ -151,6 +151,8 @@ def process_file(inp: Path) -> None:
     high_conf_updown_rots = []
 
     for i, (img, page) in enumerate(zip(images, pdf.pages), start=1):
+        current_rotation = int(page.obj.get("/Rotate", 0))
+
         # --- Step 1: rotate landscape pages into portrait (90 or 270) ---
         is_portrait = img.height >= img.width
         primary_rot = 0
@@ -181,9 +183,10 @@ def process_file(inp: Path) -> None:
             high_conf_updown_rots.append(applied_updown)
 
         total_rotation = (primary_rot + applied_updown) % 360
+        new_rotation = (current_rotation + total_rotation) % 360
 
-        if total_rotation % 360 != 0:
-            page.Rotate = total_rotation
+        if new_rotation != current_rotation:
+            page.Rotate = new_rotation
             changed += 1
 
         if conf < CONF_THRESHOLD or primary_conf < CONF_THRESHOLD:
