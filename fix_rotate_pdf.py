@@ -17,11 +17,14 @@ CONF_THRESHOLD = DEFAULT_CONF_THRESHOLD
 DPI = DEFAULT_DPI
 
 
-def detect_rotation_osd(pil_img):
+def detect_rotation_osd(pil_img, lang="jpn+eng"):
     try:
         # Use dict output to avoid regex parsing and convert to RGB to ensure DPI metadata
+        # script detection (OSD) works better with appropriate languages, though mostly script-independent
         osd = pytesseract.image_to_osd(
-            pil_img.convert("RGB"), output_type=pytesseract.Output.DICT
+            pil_img.convert("RGB"),
+            lang=lang,
+            output_type=pytesseract.Output.DICT
         )
         rot = int(osd.get("rotate", 0))
         conf = float(osd.get("orientation_confidence", 0.0))
@@ -71,7 +74,12 @@ def has_text_content(pil_img) -> bool:
     """Return True if Tesseract finds any text-like content on the image."""
 
     try:
-        data = pytesseract.image_to_data(pil_img.convert("RGB"), output_type=pytesseract.Output.DICT)
+        # Support both horizontal (jpn/eng) and vertical (jpn_vert) text detection
+        data = pytesseract.image_to_data(
+            pil_img.convert("RGB"),
+            lang="jpn+jpn_vert+eng",
+            output_type=pytesseract.Output.DICT
+        )
     except pytesseract.TesseractError:
         return False
 
@@ -214,6 +222,36 @@ def process_file(inp: Path) -> None:
 
         if conf >= CONF_THRESHOLD:
             high_conf_updown_rots.append(applied_updown)
+
+        # 縦長ページかつ回転操作(180度)が加わる場合、ダブルチェックを行う
+        # 元画像(0度)と回転後画像(180度)でOSDを行い、どちらが「0度(正立)」と判定されるか、かつその信頼度を比較する
+        if is_portrait and applied_updown != 0:
+            # 1. 元画像の正立度合い
+            # すでに計算済みの rot, conf を利用する
+            # rotが0なら「現在は正立している」という判定なので、その信頼度をスコアにする
+            # rotが180なら「現在は倒立している」という判定なので、正立スコアは0とみなす(あるいは低い値)
+            score_original = conf if rot == 0 else 0.0
+
+            # テキスト未検出などでOSDをまだやっていない場合は実行する
+            if not has_text_content(portrait_img):
+                 # テキストが無いと判定されていても、強制的にOSDを試みる（または何もしない？）
+                 # ここでは「OSD判定を行い」という指示なので試行する
+                 check_rot, check_conf = detect_rotation_osd(portrait_img)
+                 score_original = check_conf if check_rot == 0 else 0.0
+
+            # 2. 回転後画像の正立度合い
+            rotated_img = portrait_img.rotate(applied_updown, expand=True)
+            r_rot, r_conf = detect_rotation_osd(rotated_img)
+            score_rotated = r_conf if r_rot == 0 else 0.0
+
+            # 元の方が「正立している」信頼度が高いなら、回転を取り消す
+            if score_original > score_rotated:
+                print(f"  [DoubleCheck] page {i}: Reverting 180 rotation. Score Orig({score_original}) > Rot({score_rotated})")
+                applied_updown = 0
+                total_rotation = (primary_rot + applied_updown) % 360 # Update if needed, though primary is 0 here
+            else:
+                 # 回転後の方が良い、あるいはどっちもダメなら当初の判定(Poseなど)を優先
+                 pass
 
         total_rotation = (primary_rot + applied_updown) % 360
         new_rotation = (current_rotation + total_rotation) % 360
