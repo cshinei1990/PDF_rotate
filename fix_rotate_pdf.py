@@ -4,6 +4,8 @@ from collections import Counter
 import pikepdf
 from pdf2image import convert_from_path
 import pytesseract
+import tkinter as tk
+from tkinter import filedialog
 
 CONF_THRESHOLD = 5.0   # 漫画向けに低め。まずはこのくらいから
 DPI = 200              # 低すぎるとOSD精度が落ちやすい
@@ -37,9 +39,45 @@ def snap_rotation_to_allowed(rotation: int, allowed_rotations: list[int]) -> int
     return min(allowed_rotations, key=lambda allowed: _distance(rotation % 360, allowed % 360))
 
 
-def main(inp, out):
+def determine_output_path(inp: Path) -> Path:
+    """Return output path with ``_rot`` suffix in the same directory."""
+
+    return inp.with_name(f"{inp.stem}_rot{inp.suffix}")
+
+
+def save_pdf(pdf: pikepdf.Pdf, out: Path) -> Path:
+    """Save ``pdf`` to ``out`` while handling Windows permission quirks."""
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    def _try_save(path: Path):
+        if path.exists():
+            try:
+                path.unlink()
+            except PermissionError:
+                # File may be open in another app; surface a clear message.
+                raise PermissionError(
+                    f"出力ファイル {path} を上書きできません。閲覧アプリを閉じて再実行してください。"
+                )
+        pdf.save(str(path))
+
+    try:
+        _try_save(out)
+    except PermissionError as exc:
+        # As a fallback, try a slightly different name to avoid failure on locked files.
+        alt = out.with_name(f"{out.stem}_new{out.suffix}")
+        print(f"{exc}\n{out} に保存できなかったため {alt} に書き込みます。")
+        _try_save(alt)
+        out = alt
+    finally:
+        pdf.close()
+
+    return out
+
+
+def main(inp):
     inp = Path(inp)
-    out = Path(out)
+    out = determine_output_path(inp)
 
     images = convert_from_path(str(inp), dpi=DPI)
     pdf = pikepdf.open(str(inp))
@@ -76,8 +114,7 @@ def main(inp, out):
         if conf < CONF_THRESHOLD:
             low.append((i, rot, conf, used_fallback, snapped_rot))
 
-    pdf.save(str(out))
-    pdf.close()
+    out = save_pdf(pdf, out)
 
     print(f"Saved: {out}  changed_pages={changed}")
     if low:
@@ -89,7 +126,19 @@ def main(inp, out):
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) < 3:
-        print("Usage: python fix_rotate_pdf.py input.pdf output.pdf")
-        raise SystemExit(1)
-    main(sys.argv[1], sys.argv[2])
+
+    # コマンドライン引数があれば従来通り使う。なければファイルダイアログで選択。
+    if len(sys.argv) >= 2:
+        input_file = sys.argv[1]
+    else:
+        root = tk.Tk()
+        root.withdraw()
+        input_file = filedialog.askopenfilename(
+            title="回転を補正するPDFを選択してください",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if not input_file:
+            print("入力ファイルが選択されなかったため終了します。")
+            raise SystemExit(1)
+
+    main(input_file)
