@@ -1,5 +1,5 @@
 from pathlib import Path
-import re
+from collections import Counter
 
 import pikepdf
 from pdf2image import convert_from_path
@@ -32,18 +32,28 @@ def main(inp, out):
 
     low = []
     changed = 0
+    high_conf_rots = []
 
     for i, (img, page) in enumerate(zip(images, pdf.pages), start=1):
         rot, conf = detect_rotation_osd(img)
 
+        # 信頼度が低いページは、これまでの高信頼ページの多数決で補完する
+        applied_rot = rot
+        used_fallback = False
+        if conf < CONF_THRESHOLD and high_conf_rots:
+            applied_rot = Counter(high_conf_rots).most_common(1)[0][0]
+            used_fallback = True
+        else:
+            high_conf_rots.append(rot % 360)
+
         # rot(0/90/180/270)を、そのページの回転として設定
         # もし向きが逆に出る場合は、(360-rot)%360 に変えてください
-        if rot % 360 != 0:
-            page.Rotate = rot
+        if applied_rot % 360 != 0:
+            page.Rotate = applied_rot
             changed += 1
 
         if conf < CONF_THRESHOLD:
-            low.append((i, rot, conf))
+            low.append((i, rot, conf, used_fallback, applied_rot))
 
     pdf.save(str(out))
     pdf.close()
@@ -51,8 +61,9 @@ def main(inp, out):
     print(f"Saved: {out}  changed_pages={changed}")
     if low:
         print("Low-confidence pages (please verify):")
-        for p, r, c in low:
-            print(f"  page {p}: rot={r}, conf={c}")
+        for p, r, c, used_fallback, applied in low:
+            suffix = " (fallback used)" if used_fallback else ""
+            print(f"  page {p}: rot={applied}, conf={c}{suffix}")
 
 if __name__ == "__main__":
     import sys
