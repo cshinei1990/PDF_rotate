@@ -40,9 +40,22 @@ def snap_rotation_to_allowed(rotation: int, allowed_rotations: list[int]) -> int
 
 
 def determine_output_path(inp: Path) -> Path:
-    """Return output path with ``_rot`` suffix in the same directory."""
+    """Return output path with ``_rot`` suffix in the same directory.
 
-    return inp.with_name(f"{inp.stem}_rot{inp.suffix}")
+    If a file with that name already exists, append a sequential index
+    (``_1``, ``_2``, ...) to avoid overwriting existing outputs.
+    """
+
+    base = inp.with_name(f"{inp.stem}_rot{inp.suffix}")
+    if not base.exists():
+        return base
+
+    for idx in range(1, 1_000):
+        candidate = inp.with_name(f"{inp.stem}_rot_{idx}{inp.suffix}")
+        if not candidate.exists():
+            return candidate
+
+    raise FileExistsError("適切な出力ファイル名を決定できませんでした。既存の rot ファイルを整理してください。")
 
 
 def save_pdf(pdf: pikepdf.Pdf, out: Path) -> Path:
@@ -75,8 +88,7 @@ def save_pdf(pdf: pikepdf.Pdf, out: Path) -> Path:
     return out
 
 
-def main(inp):
-    inp = Path(inp)
+def process_file(inp: Path) -> None:
     out = determine_output_path(inp)
 
     images = convert_from_path(str(inp), dpi=DPI)
@@ -129,16 +141,19 @@ if __name__ == "__main__":
 
     # コマンドライン引数があれば従来通り使う。なければファイルダイアログで選択。
     if len(sys.argv) >= 2:
-        input_file = sys.argv[1]
+        input_files = sys.argv[1:]
     else:
         root = tk.Tk()
         root.withdraw()
-        input_file = filedialog.askopenfilename(
+        selected_files = filedialog.askopenfilenames(
             title="回転を補正するPDFを選択してください",
             filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
         )
-        if not input_file:
+        input_files = list(selected_files)
+
+        if not input_files:
             print("入力ファイルが選択されなかったため終了します。")
             raise SystemExit(1)
 
-    main(input_file)
+    for input_file in input_files:
+        process_file(Path(input_file))
