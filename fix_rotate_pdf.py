@@ -21,11 +21,23 @@ def detect_rotation_osd(pil_img, lang="jpn+eng"):
     try:
         # Use dict output to avoid regex parsing and convert to RGB to ensure DPI metadata
         # script detection (OSD) works better with appropriate languages, though mostly script-independent
-        osd = pytesseract.image_to_osd(
-            pil_img.convert("RGB"),
-            lang=lang,
-            output_type=pytesseract.Output.DICT
-        )
+        # Note: If passing specific langs fails (legacy engine error), we fallback to default (usually 'osd' or 'eng')
+        try:
+            osd = pytesseract.image_to_osd(
+                pil_img.convert("RGB"),
+                lang=lang,
+                output_type=pytesseract.Output.DICT
+            )
+        except pytesseract.TesseractError as e:
+            if "OSD requires a model" in str(e) or "detects only orientation" in str(e):
+                # Fallback: try without language argument (relies on default osd.traineddata)
+                osd = pytesseract.image_to_osd(
+                    pil_img.convert("RGB"),
+                    output_type=pytesseract.Output.DICT
+                )
+            else:
+                raise e
+
         rot = int(osd.get("rotate", 0))
         conf = float(osd.get("orientation_confidence", 0.0))
     except pytesseract.TesseractError as exc:
@@ -227,17 +239,10 @@ def process_file(inp: Path) -> None:
         # 元画像(0度)と回転後画像(180度)でOSDを行い、どちらが「0度(正立)」と判定されるか、かつその信頼度を比較する
         if is_portrait and applied_updown != 0:
             # 1. 元画像の正立度合い
-            # すでに計算済みの rot, conf を利用する
-            # rotが0なら「現在は正立している」という判定なので、その信頼度をスコアにする
-            # rotが180なら「現在は倒立している」という判定なので、正立スコアは0とみなす(あるいは低い値)
-            score_original = conf if rot == 0 else 0.0
-
-            # テキスト未検出などでOSDをまだやっていない場合は実行する
-            if not has_text_content(portrait_img):
-                 # テキストが無いと判定されていても、強制的にOSDを試みる（または何もしない？）
-                 # ここでは「OSD判定を行い」という指示なので試行する
-                 check_rot, check_conf = detect_rotation_osd(portrait_img)
-                 score_original = check_conf if check_rot == 0 else 0.0
+            # 注意: rot は姿勢判定によって上書きされている可能性があるため、ここで再度OSDを行うか、
+            # OSDの結果を確実に利用する。ここでは安全のため元画像に対してOSDを実行する。
+            check_rot, check_conf = detect_rotation_osd(portrait_img)
+            score_original = check_conf if check_rot == 0 else 0.0
 
             # 2. 回転後画像の正立度合い
             rotated_img = portrait_img.rotate(applied_updown, expand=True)
