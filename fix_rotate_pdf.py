@@ -82,8 +82,8 @@ def detect_pose_up_down(pil_img):
     return 0, 10.0
 
 
-def has_text_content(pil_img) -> bool:
-    """Return True if Tesseract finds any text-like content on the image."""
+def get_text_char_count(pil_img) -> int:
+    """Return the number of characters found by Tesseract on the image."""
 
     try:
         # Support both horizontal (jpn/eng) and vertical (jpn_vert) text detection
@@ -93,14 +93,20 @@ def has_text_content(pil_img) -> bool:
             output_type=pytesseract.Output.DICT
         )
     except pytesseract.TesseractError:
-        return False
+        return 0
 
     texts = data.get("text", [])
     confs = data.get("conf", [])
+
+    count = 0
     for text, conf in zip(texts, confs):
-        if text.strip() and conf not in (-1, "-1"):
-            return True
-    return False
+        if text and text.strip() and conf not in (-1, "-1"):
+            count += len(text.strip())
+    return count
+
+def has_text_content(pil_img) -> bool:
+    """Return True if Tesseract finds any text-like content on the image."""
+    return get_text_char_count(pil_img) > 0
 
 
 def snap_rotation_to_allowed(rotation: int, allowed_rotations: list[int]) -> int:
@@ -208,15 +214,25 @@ def process_file(inp: Path) -> None:
         used_fallback = False
         rot, conf = 0, 0.0
 
-        if has_text_content(portrait_img):
+        # Count characters to decide strategy
+        char_count = get_text_char_count(portrait_img)
+        has_text = char_count > 0
+
+        # Define threshold for "few characters" (e.g. less than 50 chars might be an illustration with a caption)
+        FEW_CHARS_THRESHOLD = 50
+
+        if has_text:
             rot, conf = detect_rotation_osd(portrait_img)
 
-        if conf < CONF_THRESHOLD:
-            # OSDの信頼度が低い場合（またはテキストがない場合）、姿勢推定を試す
-            # ただし、テキストが検出されている場合は OSD を優先したいので、
-            # OSD の信頼度が極端に低い (例: < 0.5) 場合のみ姿勢判定を採用する
+        if conf < CONF_THRESHOLD or char_count < FEW_CHARS_THRESHOLD:
+            # OSDの信頼度が低い場合、または文字数が少ない場合は姿勢推定を試す
+            # テキストが十分にあり、かつOSD信頼度が極端に低くない(>=0.5)場合はOSDを優先
+            # 文字数が少ない場合は、OSD信頼度が高くても姿勢判定と併用検討したいが、
+            # ここでは「文字数が少ない」＝「画像主体の可能性が高い」として姿勢判定を許容する
+
             run_pose = True
-            if has_text_content(portrait_img) and conf >= 0.5:
+            if has_text and char_count >= FEW_CHARS_THRESHOLD and conf >= 0.5:
+                # テキストが十分あり、信頼度もそこそこあれば、姿勢判定はスキップ(OSD優先)
                 run_pose = False
 
             if run_pose:
